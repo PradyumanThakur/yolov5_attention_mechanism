@@ -56,6 +56,8 @@ from utils.general import (
 )
 from utils.torch_utils import copy_attr, smart_inference_mode
 
+from models.CBAM import CBAM
+
 
 def autopad(k, p=None, d=1):
     """
@@ -81,10 +83,11 @@ class Conv(nn.Module):
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
         self.bn = nn.BatchNorm2d(c2)
         self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
+        self.cbam = CBAM(c2)
 
     def forward(self, x):
         """Applies a convolution followed by batch normalization and an activation function to the input tensor `x`."""
-        return self.act(self.bn(self.conv(x)))
+        return self.cbam(self.act(self.bn(self.conv(x))))
 
     def forward_fuse(self, x):
         """Applies a fused convolution and activation function to the input tensor `x`."""
@@ -241,10 +244,11 @@ class C3(nn.Module):
         self.cv2 = Conv(c1, c_, 1, 1)
         self.cv3 = Conv(2 * c_, c2, 1)  # optional act=FReLU(c2)
         self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
+        self.cbam = CBAM(c2)  # Add CBAM layer here
 
     def forward(self, x):
         """Performs forward propagation using concatenated outputs from two convolutions and a Bottleneck sequence."""
-        return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
+        return self.cbam(self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1)))
 
 
 class C3x(C3):
@@ -1107,3 +1111,5 @@ class Classify(nn.Module):
         if isinstance(x, list):
             x = torch.cat(x, 1)
         return self.linear(self.drop(self.pool(self.conv(x)).flatten(1)))
+
+
