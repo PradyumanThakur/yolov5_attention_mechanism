@@ -56,7 +56,7 @@ from utils.general import (
 )
 from utils.torch_utils import copy_attr, smart_inference_mode
 
-from models.CBAM import CBAM
+from models.cbam import CBAM
 
 
 def autopad(k, p=None, d=1):
