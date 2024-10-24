@@ -77,7 +77,7 @@ GIT_INFO = check_git_info()
 
 def train(opt, device):
     """Trains a YOLOv5 model, managing datasets, model optimization, logging, and saving checkpoints."""
-    init_seeds(opt.seed + 1 + RANK, deterministic=True)
+    init_seeds(opt.seed + 1 + RANK, deterministic=False)
     save_dir, data, bs, epochs, nw, imgsz, pretrained = (
         opt.save_dir,
         Path(opt.data),
