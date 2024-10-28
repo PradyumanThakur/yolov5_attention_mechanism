@@ -48,7 +48,6 @@ from models.common import (
     GhostBottleneck,
     GhostConv,
     Proto,
-    ECAC3,
     CBAMC3
 )
 
@@ -423,7 +422,6 @@ def parse_model(d, ch):
             nn.ConvTranspose2d,
             DWConvTranspose2d,
             C3x,
-            ECAC3,
             CBAMC3,
         }:
             c1, c2 = ch[f], args[0]
@@ -431,7 +429,7 @@ def parse_model(d, ch):
                 c2 = make_divisible(c2 * gw, ch_mul)
 
             args = [c1, c2, *args[1:]]
-            if m in {BottleneckCSP, C3, C3TR, C3Ghost, C3x, ECAC3, CBAMC3}:
+            if m in {BottleneckCSP, C3, C3TR, C3Ghost, C3x, CBAMC3}:
                 args.insert(2, n)  # number of repeats
                 n = 1
         elif m is nn.BatchNorm2d:

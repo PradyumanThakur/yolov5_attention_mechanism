@@ -55,6 +55,7 @@ from utils.general import (
     yaml_load,
 )
 from utils.torch_utils import copy_attr, smart_inference_mode
+from models.cbam import CBAM
 
 
 def autopad(k, p=None, d=1):
@@ -245,7 +246,6 @@ class C3(nn.Module):
     def forward(self, x):
         """Performs forward propagation using concatenated outputs from two convolutions and a Bottleneck sequence."""
         return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
-
 
 class C3x(C3):
     """Extends the C3 module with cross-convolutions for enhanced feature extraction in neural networks."""
@@ -1108,110 +1108,30 @@ class Classify(nn.Module):
             x = torch.cat(x, 1)
         return self.linear(self.drop(self.pool(self.conv(x)).flatten(1)))
 
-######################################
-# ECA net
-######################################
-class eca_layer(nn.Module):
-    """Constructs a ECA module.
-    Args:
-        channel: Number of channels of the input feature map
-        k_size: Adaptive selection of kernel size
-    """
 
-    def __init__(self, channel, k_size=3):
-        super(eca_layer, self).__init__()
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.conv = nn.Conv1d(1, 1, kernel_size=k_size, padding=(k_size - 1) // 2, bias=False)
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x):
-        # x: input features with shape [b, c, h, w]
-        b, c, h, w = x.size()
-
-        # feature descriptor on the global spatial information
-        y = self.avg_pool(x)
-
-        # Two different branches of ECA module
-        y = self.conv(y.squeeze(-1).transpose(-1, -2))
-        y = y.transpose(-1, -2).unsqueeze(-1)
-
-        # Multi-scale information fusion
-        y = self.sigmoid(y)
-
-        return x * y.expand_as(x)
-
-
-class ECAC3(nn.Module):
-    # CSP Bottleneck with 3 convolutions
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
-        super(ECAC3, self).__init__()
-        c_ = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv(c1, c_, 1, 1)
-        self.cv3 = Conv(2 * c_, c2, 1)  # act=FReLU(c2)
-        self.m = nn.Sequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
-        self.eca_layer = eca_layer(c2)
-        # self.m = nn.Sequential(*[CrossConv(c_, c_, 3, 1, g, 1.0, shortcut) for _ in range(n)])
-
-    def forward(self, x):
-        return self.eca_layer(self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), dim=1)))
-
-#############################################
-# CBAM module
-#############################################
-class ChannelAttention(nn.Module):
-    def __init__(self, in_planes, ratio=16):
-        super(ChannelAttention, self).__init__()
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.max_pool = nn.AdaptiveMaxPool2d(1)
-
-        self.fc1 = nn.Conv2d(in_planes, in_planes // ratio, 1, bias=False)
-        self.relu1 = nn.ReLU()
-        self.fc2 = nn.Conv2d(in_planes // ratio, in_planes, 1, bias=False)
-
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x):
-        b, c, _, _ = x.size()
-        avg_out = self.fc2(self.relu1(self.fc1(self.avg_pool(x))))
-        max_out = self.fc2(self.relu1(self.fc1(self.max_pool(x))))
-        out = (avg_out + max_out).view(b, c, 1, 1)
-        return x * self.sigmoid(out)
-
-
-class SpatialAttention(nn.Module):
-    def __init__(self, kernel_size=7):
-        super(SpatialAttention, self).__init__()
-
-        assert kernel_size in (3, 7), 'kernel size must be 3 or 7'
-        padding = 3 if kernel_size == 7 else 1
-
-        self.conv1 = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x):
-        b, c, w, h = x.size()
-        avg_out = torch.mean(x, dim=1, keepdim=True)
-        max_out, _ = torch.max(x, dim=1, keepdim=True)
-        out = torch.cat([avg_out, max_out], dim=1)
-        out = self.conv1(out).view(b, 1, w, h)
-        return x * self.sigmoid(x)
-
+#################################
+# CBAM Module
+#################################
 
 class CBAMC3(nn.Module):
-    # CSP Bottleneck with 3 convolutions
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
-        super(CBAMC3, self).__init__()
+    """Implements a CSP Bottleneck module with three convolutions for enhanced feature extraction in neural networks."""
+
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
+        """Initializes C3 module with options for channel count, bottleneck repetition, shortcut usage, group
+        convolutions, and expansion.
+        """
+        super().__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c1, c_, 1, 1)
-        self.cv3 = Conv(2 * c_, c2, 1)  # act=FReLU(c2)
-        self.m = nn.Sequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
-        self.channel_attention = ChannelAttention(c2, 16)
-        self.spatial_attention = SpatialAttention(7)
-
-        # self.m = nn.Sequential(*[CrossConv(c_, c_, 3, 1, g, 1.0, shortcut) for _ in range(n)])
+        self.cv3 = Conv(2 * c_, c2, 1)  # optional act=FReLU(c2)
+        self.cbam = CBAM(c2)
+        self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
 
     def forward(self, x):
-        return self.spatial_attention(
-            self.channel_attention(self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), dim=1))))
+        """Performs forward propagation using concatenated outputs from two convolutions and a Bottleneck sequence."""
+        y1 = self.cv1(x)
+        y2 = self.cv2(x)
+        y = torch.cat((self.m(y1), y2), 1)
+        y = self.cv3(y)
+        return self.cbam(y)
