@@ -1154,13 +1154,17 @@ class CBAM(nn.Module):
     # ch_in, ch_out, shortcut, groups, expansion, ratio, kernel_size
     def __init__(self, c1, c2, kernel_size=3, shortcut=True, g=1, e=0.5, ratio=16):
         super(CBAM, self).__init__()
+        if kernel_size not in (3, 7):  # Enforce valid kernel sizes
+            kernel_size = 3
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c_, c2, 3, 1, g=g)
         self.add = shortcut and c1 == c2
         # Add CBAM module
         self.channel_attention = ChannelAttention(c2, ratio)
+        print("CBAM Kernel Size:", kernel_size)
         self.spatial_attention = SpatialAttention(kernel_size)
+
 
     def forward(self, x):
         # Consider adding the CBAM module at the beginning of the bottleneck module or before the shortcut in the bottleneck module. Here, we choose before the shortcut.
