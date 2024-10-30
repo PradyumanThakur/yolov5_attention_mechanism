@@ -55,6 +55,7 @@ from utils.general import (
     yaml_load,
 )
 from utils.torch_utils import copy_attr, smart_inference_mode
+from models.cbam import CBAM
 
 
 def autopad(k, p=None, d=1):
@@ -1111,66 +1112,26 @@ class Classify(nn.Module):
 #################################
 # CBAM Module
 #################################
-class ChannelAttention(nn.Module):
-    def __init__(self, in_planes, ratio=16):
-        super(ChannelAttention, self).__init__()
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.max_pool = nn.AdaptiveMaxPool2d(1)
-        self.f1 = nn.Conv2d(in_planes, in_planes // ratio, 1, bias=False)
-        self.relu = nn.ReLU()
-        self.f2 = nn.Conv2d(in_planes // ratio, in_planes, 1, bias=False)
-        self.sigmoid = nn.Sigmoid()
 
-    def forward(self, x):
-        # Global Average Pooling—>MLP two-layer convolution
-        avg_out = self.f2(self.relu(self.f1(self.avg_pool(x))))
-        # Global maximum pooling -> MLP two-layer convolution
-        max_out = self.f2(self.relu(self.f1(self.max_pool(x))))
-        out = self.sigmoid(avg_out + max_out)
-        return out
+class CBAMC3(nn.Module):
+    """Implements a CSP Bottleneck module with three convolutions for enhanced feature extraction in neural networks."""
 
-
-class SpatialAttention(nn.Module):
-    def __init__(self, kernel_size=7):
-        super(SpatialAttention, self).__init__()
-        assert kernel_size in (3, 7), 'kernel size must be 3 or 7'
-        padding = 3 if kernel_size == 7 else 1
-        self.conv = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x):
-        # Channel-based global average pooling (channel=1)
-        avg_out = torch.mean(x, dim=1, keepdim=True)
-        # Channel-based global maximum pooling (channel=1)
-        max_out, _ = torch.max(x, dim=1, keepdim=True)
-        # Channel splicing (channel=2)
-        x = torch.cat([avg_out, max_out], dim=1)
-        # channel=1
-        x = self.conv(x)
-        return self.sigmoid(x)
-
-
-class CBAM(nn.Module):
-    # ch_in, ch_out, shortcut, groups, expansion, ratio, kernel_size
-    def __init__(self, c1, c2, kernel_size=3, shortcut=True, g=1, e=0.5, ratio=16):
-        super(CBAM, self).__init__()
-        if kernel_size not in (3, 7):  # Enforce valid kernel sizes
-            kernel_size = 3
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
+        """Initializes C3 module with options for channel count, bottleneck repetition, shortcut usage, group
+        convolutions, and expansion.
+        """
+        super().__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv(c_, c2, 3, 1, g=g)
-        self.add = shortcut and c1 == c2
-        # Add CBAM module
-        self.channel_attention = ChannelAttention(c2, ratio)
-        print("CBAM Kernel Size:", kernel_size)
-        self.spatial_attention = SpatialAttention(kernel_size)
-
+        self.cv2 = Conv(c1, c_, 1, 1)
+        self.cv3 = Conv(2 * c_, c2, 1)  # optional act=FReLU(c2)
+        self.cbam = CBAM(c2)
+        self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
 
     def forward(self, x):
-        # Consider adding the CBAM module at the beginning of the bottleneck module or before the shortcut in the bottleneck module. Here, we choose before the shortcut.
-        x2 = self.cv2(self.cv1(x))  # x and x2 have the same number of channels
-        # Add the CBAM module before the shortcut in the bottleneck module
-        out = self.channel_attention(x2) * x2
-        # print('outchannels:{}'.format(out.shape))
-        out = self.spatial_attention(out) * out
-        return x + out if self.add else out
+        """Performs forward propagation using concatenated outputs from two convolutions and a Bottleneck sequence."""
+        y1 = self.cv1(x)
+        y2 = self.cv2(x)
+        y = torch.cat((self.m(y1), y2), 1)
+        y = self.cv3(y)
+        return self.cbam(y)
